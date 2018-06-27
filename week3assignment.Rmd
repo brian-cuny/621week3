@@ -1,32 +1,47 @@
 ---
-title: "Project 2"
-author: "Brian Weinfeld"
-date: "June 26, 2018"
-output: html_document
+output:
+  pdf_document:
+    df_print: kable
+header-includes:
+  \usepackage{fancyhdr}
+  \pagestyle{fancy}
+  \fancyhead[L]{\textbf{CRIME ANALYSIS AND PREDICTION VIA LOGISTIC REGRESSION}}
+  \fancyhead[R]{\thepage}
+  \fancyfoot[C]{}
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(magrittr)
+library(knitr)
+library(ROCR)
+raw.data <- read_csv('https://raw.githubusercontent.com/brian-cuny/621week3/master/crime-training-data.csv') %>%
+  mutate(chas = factor(chas))
 ```
 
-## Overview
+# Abstract
 
-I have been tasked with developing a logistic regression that will accurately determine whether a neighborhood in a major city has a crime rate either above or below the median rate. The data set I have been provided with has 466 observations across 13 predictors. 
+I have been tasked with developing a logistic regression that will accurately determine whether a neighborhood in a major city has a crime rate either above or below the median rate. The training set I have been provided with has 466 observations across 13 predictors. The evaluation set has 40 observations that must be categorizied. 
 
-I will begin by exploring the data set as a whole and then each individual predictors.
+I will develop three regression models, explore each, and ultimately select the strongest model to use on the evaluation set.
 
-## Data Exploration
+I will begin by exploring the data set as a whole and then each individual predictor.
 
-```{r}
-raw.data %>%
-  map_dbl(~sum(is.na(.))/nrow(raw.data))
-```
+# Data Exploration
 
 Initial inspection of the data very helpfully shows that there are no missing values. Thus, we will not need to impute any data or remove/modify any of the predictors before individual analysis.
 
-```{r}
+```{r, cache=TRUE}
+raw.data %>%
+  map_df(~sum(is.na(.))/nrow(raw.data)) %>%
+  kable()
+```
+
+I partition the data into a training set and testing set. The training set contains 80% of the total number of observations. Using caret's createDataPartition method ensures that each partition has target values roughly representation of the overall population. With this data set, there is an appoximate even split between below the median crime rate (0) and above (1). This is reflected in both the training and the testing set.
+
+
+```{r, cache=TRUE}
 set.seed(123)
 part <- caret::createDataPartition(raw.data$target, p=0.8, list=FALSE)
 training <- raw.data %>%
@@ -35,165 +50,177 @@ testing <- raw.data %>%
   filter(!row_number() %in% part)
 ```
 
-I partition the data into a training set and testing set. The training set contains 80% of the total number of observations. Using caret's createDataPartition method ensures that each partition has target values roughly representation of the overall population. With this data set, there is an appoximate even split between below the median crime rate (0) and above (1).
+I created a function called Predictor.Disp that is designed to help me in displaying each predictor. It produces a density plot of the predictor in order to aid in determining the predictor's distribution and a box plot faceted by the target response variable in order to aid in comparison of the spread between the two groups.
 
-```{r}
+```{r, message=FALSE, cache=TRUE}
 Predictor.Disp <- function(x){
   require(gridExtra)
   plot.1 <- ggplot(training, aes_string(x)) +
-    geom_density()
+    geom_density() +
+    labs(y = 'Density',
+         title = 'Predictor Distribution') +
+    theme_bw() +
+    scale_x_continuous(expand = c(0, 0)) +
+    scale_y_continuous(expand = c(0, 0, 0.05, 0.05))
   
   plot.2 <- 
     training %>%
       mutate(target = factor(target)) %>%
       ggplot(aes_string('target', x)) +
       geom_boxplot() +
-      geom_point(alpha=0.2)
+      geom_point(alpha=0.2) +
+      theme_bw() +
+      labs(x='',
+           y='',
+           title='Variance by Target Value') +
+      scale_x_discrete(labels = c('Below Median', 'Above Median')) +
+      theme(panel.grid.minor = element_blank(),
+            panel.grid.major.x = element_blank())
   
   grid.arrange(plot.1, plot.2, ncol=2)
 }
 ```
 
-I created a function called Predictor.Disp that is designed to help me in displaying each predictor. It produces a density plot of the predictor in order to aid in determining the predictors distribution and a box plot faceted by the target response variable in order to aid in comparison of the spread between the two groups.
 
-###zn
+##zn
 
-zn: proportion of residential land zoned for large lots (over 25000 square feet)
+**Proportion of residential land zoned for large lots (over 25000 square feet)**
 
-```{r}
+The 'zn' predictor is highly skewed. In fact, 43.7% of all the entries are 0. When examining the box plots it appears that all but two of the above median crime neighborhoods have 0 for 'zn'.
+
+```{r, message=FALSE, echo=FALSE, cache=TRUE, fig.height=4, fig.width=10, fig.align='center'}
 Predictor.Disp('zn')
 ```
 
-The 'zn' predictor is highly skewed. In fact, 43.7% of all the entries are 0. When examining the box plots it appears that all but two of the above median crime neighborhoods have 0 for zn.
+##indus
 
-###indus
-
-indus: Proportion of non-retail business acres per suburb
-
-```{r}
-Predictor.Disp('indus')
-```
+**Proportion of non-retail business acres per suburb**
 
 The density plot is bimodal indicating that indus is typically either 'low' or 'high'. The spread of the predictor in the box plot is showing that higher indus is associated with higher crime.
 
-###chas
+```{r, message=FALSE, echo=FALSE, cache=TRUE, fig.height=4, fig.width=10, fig.align='center'}
+Predictor.Disp('indus')
+```
 
-chas: A dummy variable for whether the suburb borders the Charles River
+##chas
+
+**A dummy variable for whether the suburb borders the Charles River**
 
 This is the only categorical variable in the predictor set. As per our textbook, 'when x is a dummy variable, it can be shown that the log odds are also a linear function of x'.
 
-###nox
+##nox
 
-nox: Nitrogren oxides concentration (parts per 10 million)
+**Nitrogren oxides concentration (parts per 10 million)**
 
-```{r}
+The 'nox' variable has a slightly skew distribution and the fairly even variance in the boxplot. As per the textbook, 'when conducting a binary regression with a skewed predictor, it is often easiest to assess the need for x and log(x) by including them both in the model.'
+
+```{r, message=FALSE, echo=FALSE, cache=TRUE, fig.height=4, fig.width=10, fig.align='center'}
 Predictor.Disp('nox')
 ```
 
-The nox variable has a slightly skew distribution and the fairly even spread in the boxplot. As per the textbook, 'when doncuting a binary regression with a skewed predictor, it is often easiest to assess the need for x and log(x) by including them both in the model.'
+##rm
 
-###rm
+**Average number of rooms per dwelling**
 
-rm: Average number of rooms per dwelling
+The 'rm' predictor is very nicely normally distributed with a nearly equal median value when seperated by target. Despite the ease of working with normally distributed data, the fact that the spread and median in the boxplot is so similar suggested that rm may not produce a statistically significant difference.
 
-```{r}
+```{r, message=FALSE, echo=FALSE, cache=TRUE, fig.height=4, fig.width=10, fig.align='center'}
 Predictor.Disp('rm')
 ```
 
-The rm predictor is very nicely normally distributed with a nearly equal median value when seperated by target. Despite the ease of working with normally distributed data, the fact that the spread and median in the boxplot is so similar suggested that rm may not produce a statistically significant difference.
+##age
 
-###age
+**Proportion of owner-occupied units built prior to 1940**
 
-age: Proportion of owner-occupied units built prior to 1940
+The 'age' predictor is heavily skewed indicating that a tranformation may be necessary. As with the 'nox' predictor, it may be required to add a log term to the model.
 
-```{r}
+```{r, message=FALSE, echo=FALSE, cache=TRUE, fig.height=4, fig.width=10, fig.align='center'}
 Predictor.Disp('age')
 ```
 
-The age predictor is heavily skewed indicating that a tranformation may be necessary. As with the 'nox' predictor, it may be required to add a log term to the model.
+##dis
 
-###dis
+**Weighted mean of distances to five Boston employment centers**
 
-dis: Weighted mean of distances to five Boston employment centers
+'dis' is similar to the above skewed predictors. There appears to be a demonstrable difference when considering higher crime locations and lower crime locations.
 
-```{r}
+```{r, message=FALSE, echo=FALSE, cache=TRUE, fig.height=4, fig.width=10, fig.align='center'}
 Predictor.Disp('dis')
 ```
 
-dis is similar to the above skewed predictors. There appears to be a demonstrable difference when considering higher crime locations and lower crime locations.
 
-###rad
+##rad
 
-rad: index of accessibility to radial highways
-
-```{r}
-Predictor.Disp('rad')
-```
+**index of accessibility to radial highways**
 
 The 'rad' variable, like 'zn' and 'indus' above, is strongly bimodal, perhaps even moreso than those variables. This again indicates that 'rad' can be identified as either 'high' or 'low'.
 
-###tax
-
-tax: Full-value property-tax rate per $10,000
-
-```{r}
-Predictor.Disp('tax')
+```{r, message=FALSE, echo=FALSE, cache=TRUE, fig.height=4, fig.width=10, fig.align='center'}
+Predictor.Disp('rad')
 ```
+
+##tax
+
+**Full-value property-tax rate per $10,000**
 
 'tax', like 'rad' is also highly bimodal. This indicates a large number of low tax areas and a small number of high tax areas. Interestingly, it is the high tax areas that seem to exhibit more crime.
 
-###ptratio
-
-ptratio: pupil-teacher ratio by town
-
-```{r}
-Predictor.Disp('ptratio')
+```{r, message=FALSE, echo=FALSE, cache=TRUE, fig.height=4, fig.width=10, fig.align='center'}
+Predictor.Disp('tax')
 ```
+
+##ptratio
+
+**pupil-teacher ratio by town**
 
 'ptratio' is skewed and may be in need of transforming.
 
-###black
+```{r, message=FALSE, echo=FALSE, cache=TRUE, fig.height=4, fig.width=10, fig.align='center'}
+Predictor.Disp('ptratio')
+```
 
-black: $$1000(B_{k}-0.63)^2$$ where $$B_{k}$$ is the proportion of blacks by town
+##black
 
-```{r}
+**$1000(B_{k}-0.63)^2$ where $B_{k}$ is the proportion of blacks by town**
+
+'black' is more similar to the first predictor 'zn' in that nearly all the data is centered around a very small range with a number of outliers. 
+
+```{r, message=FALSE, echo=FALSE, cache=TRUE, fig.height=4, fig.width=10, fig.align='center'}
 Predictor.Disp('black')
 ```
 
-'black' is more simiarl to the first predictor 'zn' in that nearly all the data is centered around a very small range with a number of outliers. 
+##lstat
 
-###lstat
-
-lstat: lower status of the population (percent)
-
-```{r}
-Predictor.Disp('lstat')
-```
+**lower status of the population (percent)**
 
 'lstat' is fairly normally, similar to 'rm' however the boxplots indicate that the difference between low and high crime areas may be significant.
 
-###medv
-
-medv: Median value of owner-occupied homes in $1000s
-
-```{r}
-Predictor.Disp('medv')
+```{r, message=FALSE, echo=FALSE, cache=TRUE, fig.height=4, fig.width=10, fig.align='center'}
+Predictor.Disp('lstat')
 ```
+
+##medv
+
+**Median value of owner-occupied homes in $1000s**
 
 The final predictor is nearly normal and the boxpots have a roughly equal variance.
 
-###Conclusion
+```{r, message=FALSE, echo=FALSE, cache=TRUE, fig.height=4, fig.width=10, fig.align='center'}
+Predictor.Disp('medv')
+```
 
-In conclusion the 13 predictors can be grouped roughly as followed:
+##Summary
+
+Using the information gained by examining each predictor, I am able to make initial decisions in how to prepare the predictors for the first model. The 13 predictors can be grouped roughly as followed:
 
 * Nearly Normal: rm, lstat, medv
 * Bimodal / Highly Segregated: zn, indus, rad, tax, black
 * Skewed: nox, age, dis, ptratio
 * Categorical: chas
 
-##Data Preperation
+#Data Preperation
 
-I will begin by altering the Bimodal / Highly Segregated predictors. I found a number of articles online indicating that this should NOT done or at least done with consideration. By bucketing continuous variables I will lose some of the predictive power that might be present in the variable. These concerns can be eased somewhat due to the fact that the data is highly segregated (the question is almost in essance asking for a 'high' or 'low' response) and that there are several other continuous predictors. 
+I will begin by altering the Bimodal / Highly Segregated predictors by transforming them into categorical data. I found a number of articles online indicating that this should be done with care because bucketing continuous variables may result in the lose of some of the predictive power that might be present in the variable. These concerns can be eased somewhat due to the fact that the data is highly segregated (the question is almost in essance asking for a 'high'/'low' or 'none'/'any' response) and that there are several other continuous predictors. 
 
 I will be converting zn, indus, rad, tax and black into categorical data. The split point was determined by viewing the density plot above and selecting a value that attempted to accurately identify the information contained by the predictor. For 'zn', the split is between 0 and any other value and for the rest a value near the median was selected.
 
@@ -208,54 +235,59 @@ training.cat <- training %>%
   select(-chas, -zn, -indus, -rad, -tax, -black)
 ```
 
-There are several other transformations that must be done but first I would like to build a model with the data I have collected thus far.
+There are several other transformations that may aid my model but first I would like to build a model with the data I have collected thus far.
 
 ##Model 1
 
-For this model I will only using the 6 categorical predictors. As per the textbook I know that each predictor will be linearly related to the log odds and thus the model will be valid. In addition, I may be able to glean additional helpful information from the model.
+For this model I will only be using the 6 categorical predictors. As per the textbook I know that each predictor will be linearly related to the log odds and thus the model will be valid. In addition, I may be able to glean helpful information from the model that will aid in the development of my other two models.
 
 ```{r}
-model.1 <- glm(target ~ chas.cat + zn.cat + indus.cat + rad.cat + tax.cat + black.cat, data=training.cat,
-               family=binomial)
+model.1 <- glm(target ~ chas.cat + zn.cat + indus.cat + rad.cat + tax.cat + black.cat, 
+               data=training.cat, family=binomial)
 summary(model.1)
 ```
 
 Looking at the summary there are two predictors, 'rad.cat' and 'tax.cat', that appear to be completely worthless with p-value of essentially 1. However, upon further inspection, it turns out there is a reasonable explanation for this result.
 
 ```{r}
-car::vif(model.1)
+data_frame(name=names(car::vif(model.1)), value=car::vif(model.1)) %>% 
+  spread(1, 2) %>%
+  kable()
 ```
 
-The 'rad.cat' and 'tax.cat' have wide std. error due to high multi-collinearity. In fact, it turns out that these predictors are nearly identical sharing over 98% of the same values!
+The 'rad.cat' and 'tax.cat' have wide std. error due to high collinearity. In fact, it turns out that these predictors are nearly identical, sharing over 98% of the same values!
 
 ```{r}
 nrow(training.cat %>% filter(rad.cat == tax.cat)) / nrow(training.cat)
 ```
 
- Apparently being close to a radial highway almost means that you pay higher taxes. It is clear that we do not need both of this variables. I am arbitrarily removing 'tax.cat' as I believe 'rad.cat' is easier to calculate for future data. It is important to note that 'tax.cat' will serve as a valid substitute however, should a future researcher be unable to obtain the 'rad.cat' variable.
+ Apparently, being close to a radial highway essentially means that you pay higher taxes and vice versa. It is clear that we do not need both of this variables. I am removing 'rad.cat' as 'tax.cat' ends up being statistically significant in the remaining models. I need to be cognizant of the fact that this may be overfitting the training data and explore alternate possibilities later on.
 
 ```{r}
-model.1.2 <- glm(target ~ chas.cat + zn.cat + indus.cat + rad.cat + black.cat, data=training.cat,
-               family=binomial)
+model.1.2 <- glm(target ~ chas.cat + zn.cat + indus.cat + tax.cat + black.cat, 
+                 data=training.cat, family=binomial)
 summary(model.1.2)
 ```
 
-Using `MASS::stepAIC(model.1.2)` reveals no suggested modifications to the selected predictors. Multi-collinearity is no longer a problem for this model. Unfortunately, an anova test has indicated that the removal of the single predictor has had a statistically significant impact on our model's predictive ability.[See Appendix]
+Using `MASS::stepAIC(model.1.2)` reveals no suggested modifications to the selected predictors. Multi-collinearity is no longer a problem for this model. Unfortunately, an anova test has indicated that the removal of the single predictor has had a statistically significant impact on our model's predictive ability. [See Appendix for diagnostics]
 
 ```{r}
-car::vif(model.1.2)
+data_frame(name=names(car::vif(model.1.2)), value=car::vif(model.1.2)) %>% 
+  spread(1, 2) %>%
+  kable()
 ```
 
 ```{r}
 anova(model.1, model.1.2, test='Chisq')
 ```
 
-$$\widehat{y} = 0.9568\times chas + -1.0711\times zn + 1.8708\times indus + 18.4436\times rad + -0.9924\times black + -0.34$$
+$$\widehat{y} = 0.92\times chas + -1.12\times zn + 2.44\times indus + 1.25\times tax + -0.99\times black + -0.32$$
+
 ##Model 2
 
 As per the textbook, it is suggested that I should add a log term for skewed predictors along with the original term in an effort to determine which predictors are necessary for a useful model. I have found four skewed predictors (nox, age, dis and ptratio). For the second model I will include all the categorical variables from model 1 and all the continuous variables and their logs.
 
-```{r}
+```{r, warning=FALSE}
 training.log <- training.cat %>%
   mutate(l.nox = log(nox),
          l.age = log(age),
@@ -267,17 +299,24 @@ model.2 <- glm(target ~ ., data=training.log, family=binomial)
 Using `MASS::stepAIC(model.2)` reduces the number of predictors from 17 to 11.
 
 ```{r, warning=FALSE}
-model.2 <- glm(target ~ nox + age + dis + ptratio + medv + chas.cat + rad.cat + tax.cat + black.cat + l.age + l.dis, data=training.log, family=binomial)
+model.2 <- glm(target ~ nox + age + dis + ptratio + medv + chas.cat + rad.cat + tax.cat + 
+                 black.cat + l.age + l.dis, data=training.log, family=binomial)
 ```
 
-```{r}
-car::vif(model.2)
+```{r, collapse=TRUE}
+to.disp <- data_frame(name=names(car::vif(model.2)), value=car::vif(model.2)) %>% 
+  spread(1, 2)
+to.disp[, 1:6] %>%
+  kable()
+to.disp[, 7:11] %>%
+  kable()
 ```
 
-Just like before, there is a problem with multi-collinearity between 'rad.cat' and 'tax.cat'. There appears to be a problem with colinearity between dis and log(dis) for obvious reasons. Examining whether this is a valid regression may also aid insight into whether both predictors are required.[See Appendix]
+Just like before, there is a problem with multi-collinearity between 'rad.cat' and 'tax.cat'. There appears to be a problem with colinearity between dis and log(dis) for obvious reasons. Examining whether this is a valid regression may also aid insight into whether both predictors are required. [See Appendix for diagnostics]
 
 ```{r, warning=FALSE}
-model.2 <- glm(target ~ nox + age + dis + ptratio + medv + chas.cat + rad.cat + black.cat + l.age + l.dis, data=training.log, family=binomial)
+model.2 <- glm(target ~ nox + age + dis + ptratio + medv + chas.cat + tax.cat + black.cat 
+               + l.age + l.dis, data=training.log, family=binomial)
 summary(model.2)
 ```
 
@@ -287,49 +326,130 @@ anova(model.1.2, model.2, test='Chisq')
 
 The anova test indicates that the second model is statistically significantly more accurate than model 1. 
 
-$$\widehat{y} = 53.39\times nox + 0.088\times age + -2.06\times dis + 0.37\times ptratio + $$
-$$0.19\times medv + 1.12\times chas + 19.69\times rad + -1.2\times black + -2.58\times log(age) + $$
-$$12.22\times log(dis) + -42.29$$
+$$\widehat{y} = 54.24\times nox + 0.07\times age + -1.52\times dis + 0.41\times ptratio + $$
+$$0.18\times medv + 1.21\times chas + 1.59\times tax + -1.3\times black + -2.06\times log(age) + $$
+$$9.75\times log(dis) + -43.1$$
 
-###Model 3
+##Model 3
 
-In an effort to reduce the number of predictors without significantly hindering predictive ability, I will use BIC which features a more heavy penalty than AIC (which was used for Model 2)
+In an effort to reduce the number of predictors without significantly hindering predictive ability, I will use BIC which features a heavier penalty term than AIC (which was used for Model 2)
 
 Using `MASS::stepAIC(model.3, k=log(nrow(training.log)))` produces the following model. Just as with model 1 and 2, the high collinearity between rad.cat and tax.cat will need to be addressed.
 
 ```{r, warning=FALSE}
-model.3 <- glm(target ~ nox + age + dis + ptratio + medv + rad.cat + black.cat + l.dis, data=training.log, family=binomial)
+model.3 <- glm(target ~ nox + age + dis + ptratio + medv + tax.cat + black.cat + l.dis, 
+               data=training.log, family=binomial)
 summary(model.3)
 ```
 
-This model features two fewer predictors than the second model, however an anova test indicates that it's deviance is worse. Howeve the AIC for model 3 is 172.23 and model 2 is 168.06 which is a very small difference for the two additional predictors in model 2.[See Appendix]
+This model features two fewer predictors than the second model, however an anova test indicates that it's deviance is worse. Howeve the AIC for model 3 is 193.85 and model 2 is 191.22 which is a very small difference for the two additional predictors in model 2. In addition this is the only model where every predictor is statistically significant. [See Appendix for diagnostic]
 
-$$\widehat{y} = 49.15\times nox + 0.03\times age + -1.76\times dis + 0.32\times ptratio + $$
-$$0.17\times medv + 19.46\times rad + -1.28\times black + 10.67\times log(dis) + -44.74432$$
+$$\widehat{y} = 50.88\times nox + 0.03\times age + -1.28\times dis + 0.37\times ptratio + $$
+$$0.17\times medv + 1.48\times tax + -1.4\times black + 8.54\times log(dis) + -45.15$$
 
+#Select Model
 
-##Select Model
+I have developed three models, but must select the one to use to run on the evaluation data. It has already been established that model 2 has the best predictive ability on the training data and that difference is statistically significant. Further examination will help determine which model to select.
 
-TO COMPLETE
+$R^2$ does not exist for logistic regression in the traditional sense. However, there are a number of so called pseudo $R^2$ terms that can be analized.
 
-use loghelp.R functions (check website where they came from for more help)
+```{r}
+data_frame(name=names(pscl::pR2(model.1.2)), value=pscl::pR2(model.1.2)) %>% 
+  spread(1, 2) %>%
+  kable()
+data_frame(name=names(pscl::pR2(model.2)), value=pscl::pR2(model.2)) %>% 
+  spread(1, 2) %>%
+  kable()
+data_frame(name=names(pscl::pR2(model.3)), value=pscl::pR2(model.3)) %>% 
+  spread(1, 2) %>%
+  kable()
+```
 
-use ROC to determine dividing line for each model.
+All of these measures, and specifically McFadden, support the anova test's conclusion that model 2 is the strongest with model 3 just slightly behind in predictive ability.
 
-create confusion matrix with caret for testing data and compare results. 
+Finally, we will examine the predictive ability of the models by examining the confusion matrix of each model while using the testing data that had been previously set aside. Exploring the ROC curve of all three models indicates that 0.5 is a reasonable threshold for prediction that helps to maximize the true positive rate while minimizing the false positive rate. This follows with the assignment requirement of using a 0.5 threshold.
 
-SELECT MODEL
+```{r, cache=TRUE, fig.height=4, fig.width=4, fig.align='center'}
+ROCRPred <- prediction(predict(model.1.2, type='response'), training.cat$target)
+ROCRPref <- performance(ROCRPred, 'tpr', 'fpr')
+plot(ROCRPref, colorize=TRUE, print.cutoffs.at = seq(0.1, by=0.1))
+```
 
-produce results for testing data
+```{r, cache=TRUE, fig.height=4, fig.width=4, fig.align='center'}
+ROCRPred <- prediction(predict(model.2, type='response'), training.log$target)
+ROCRPref <- performance(ROCRPred, 'tpr', 'fpr')
+plot(ROCRPref, colorize=TRUE, print.cutoffs.at = seq(0.1, by=0.1))
+```
 
-write conclusion
+```{r, cache=TRUE, fig.height=4, fig.width=4, fig.align='center'}
+ROCRPred <- prediction(predict(model.3, type='response'), training.cat$target)
+ROCRPref <- performance(ROCRPred, 'tpr', 'fpr')
+plot(ROCRPref, colorize=TRUE, print.cutoffs.at = seq(0.1, by=0.1))
+```
 
+I created confusion matrices on the previously set aside testing data set. While all three models perform well (79%, 83% and 87% respectively), it is the third model that performs the best on the validation data. This is despite the fact that it has a lower predictive value on the training data. This indicates to me that model 2 may suffer from some overfitting. 
 
+```{r, include=FALSE}
+testing.cat <- testing %>%
+  mutate(chas.cat = factor(chas),
+         zn.cat = factor(ifelse(zn == 0, 0, 1)),
+         indus.cat = factor(ifelse(indus < 14, 0, 1)),
+         rad.cat = factor(ifelse(rad <= 15, 0, 1)),
+         tax.cat = factor(ifelse(tax <= 540, 0, 1)),
+         black.cat = factor(ifelse(black <= 390, 0, 1))) %>%
+  select(-chas, -zn, -indus, -rad, -tax, -black)
+testing.log <- testing.cat %>%
+  mutate(l.nox = log(nox),
+         l.age = log(age),
+         l.dis = log(dis),
+         l.ptratio = log(ptratio))
+```
 
+```{r}
+predictions <- ifelse(predict(model.1.2, newdata=testing.cat, type='response') < 0.5, 0, 1)
+caret::confusionMatrix(table(predicted=predictions, actual = testing.cat$target))
+```
 
-##Appendix
+```{r}
+predictions <- ifelse(predict(model.2, newdata=testing.log, type='response') < 0.5, 0, 1)
+caret::confusionMatrix(table(predicted=predictions, actual = testing.log$target))
+```
 
-I created a function to produce marginal model plots to determine whether each model is a valid regression.
+```{r}
+predictions <- ifelse(predict(model.3, newdata=testing.log, type='response') < 0.5, 0, 1)
+caret::confusionMatrix(table(predicted=predictions, actual = testing.log$target))
+```
+
+I have decided to select model 3. Model 3 has demonstrated strong predictive ability on the testing set and has the added benefit of being less complex (featuring fewer predictors) than model 2. As mentioned above I believe that model 2 may suffer from some overfitting which leads me to believe that model 3 will perform better against the evaluation data.
+
+Below are the results on the evaluation data set.
+
+```{r, message=FALSE}
+final.data <- read_csv('https://raw.githubusercontent.com/brian-cuny/621week3/master/crime-evaluation-data.csv') %>%
+  mutate(chas.cat = factor(chas),
+         zn.cat = factor(ifelse(zn == 0, 0, 1)),
+         indus.cat = factor(ifelse(indus < 14, 0, 1)),
+         rad.cat = factor(ifelse(rad <= 15, 0, 1)),
+         tax.cat = factor(ifelse(tax <= 540, 0, 1)),
+         black.cat = factor(ifelse(black <= 390, 0, 1))) %>%
+  select(-chas, -zn, -indus, -rad, -tax, -black) %>%
+  mutate(l.nox = log(nox),
+         l.age = log(age),
+         l.dis = log(dis),
+         l.ptratio = log(ptratio))
+to.output <- data_frame(prob = predict(model.3, newdata=final.data, type='response'),
+                        class = ifelse(prob < 0.5, 0, 1)) %>%
+              mutate(id = row_number()) %>%
+              select(id, prob, class)
+to.output %>%
+  kable()
+```
+
+In conclusion, I have been able to make predictions on a variety of neighborhoods of a major city in order to determine whether the neighborhood is likely to be above the median crime rate or below the median crime rate. From the initial set of predictors, a subset was selected that demonstrated strong predictive ability. Testing the data on a withheld set produced 87% accuracy. It was this model that was used on the evaluation set. It is my hope that the model wil be able to produce similar results on the evaluation data. 
+
+#Appendix
+
+I created a function to produce marginal model plots to determine whether each model is valid.
 
 ```{r}
 Marginal.Model.Two <- function(p){
@@ -351,41 +471,43 @@ Marginal.Model.Three <- function(p){
 }
 ```
 
-###Model 1
+##Model 1
 
-```{r}
+```{r, cache=TRUE, fig.height=3, fig.width=3, fig.align='center'}
 faraway::halfnorm(hatvalues(model.1.2))
 ```
 
 The halfnorm plot for model 1 appears to show a high leverage point in 237. As this is a single point across the entire model, and it does not appear to be too far off the quantile line, it is unlikely to be heavily skewing the model.
 
-###Model 2
+##Model 2
 
 I must examine the non-categorical predictor variables' marginal model plots.
 
-```{r}
+```{r, cache=TRUE, fig.height=5, fig.width=8, fig.align='center'}
 require(gridExtra)
-grid.arrange(Marginal.Model.Two('nox'), Marginal.Model.Two('age'), Marginal.Model.Two('ptratio'),
-             Marginal.Model.Two('medv'), Marginal.Model.Two('l.age'), Marginal.Model.Two('l.dis'), 
+grid.arrange(Marginal.Model.Two('nox'), Marginal.Model.Two('age'), 
+             Marginal.Model.Two('ptratio'), Marginal.Model.Two('medv'), 
+             Marginal.Model.Two('l.age'), Marginal.Model.Two('l.dis'), 
              Marginal.Model.Two('dis'), ncol=2)
+```
+
+```{r, cache=TRUE, fig.height=3, fig.width=3, fig.align='center'}
 faraway::halfnorm(hatvalues(model.2))
 ```
 
-The marginal model plots are all fairly accurate, with a note that l.dis appears to deviate the most. Observation 238 appears to be a significant outlier. It sits just below Cook's distance. After visual inspection this does not appear to be fautly data and, combined with it not being past Cook's distance, will be left.
+The marginal model plots are all fairly accurate, with a note that l.dis appears to deviate the most. Observation 238 appears to be a significant outlier. I examined this point further on a leverage plot and it sits just below Cook's distance. There does not appear to anything fautly about the data and, combined with it not being past Cook's distance, will be left in the model.
 
-###Model 3
+##Model 3
 
-```{r}
+```{r, message=FALSE, cache=TRUE, fig.height=4, fig.width=8, fig.align='center'}
 require(gridExtra)
-grid.arrange(Marginal.Model.Two('nox'), Marginal.Model.Two('age'), Marginal.Model.Two('dis'),
-             Marginal.Model.Two('ptratio'), Marginal.Model.Two('medv'), Marginal.Model.Two('l.dis'), ncol=2)
+grid.arrange(Marginal.Model.Two('nox'), Marginal.Model.Two('age'), 
+             Marginal.Model.Two('dis'), Marginal.Model.Two('ptratio'),
+             Marginal.Model.Two('medv'), Marginal.Model.Two('l.dis'), ncol=2)
+```
+
+```{r, cache=TRUE, fig.height=3, fig.width=3, fig.align='center'}
 faraway::halfnorm(hatvalues(model.3))
 ```
 
-The marginal model plots for all the predictors are very close to the expected values. This indicates a valid model. There appears to be no bad leverage points in this data set. Observation 223 may be an outliers, but it is a low leverage point and thus will be left alone.
-
-
-
-
-
-
+The marginal model plots for all the predictors are very close to the expected values. This indicates a valid model. There appears to be no bad leverage points in this data set. When view on a leverage plot, observation 223 may be an outlier, but it is a low leverage point and thus will be left alone.
